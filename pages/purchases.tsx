@@ -1,209 +1,26 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import Layout from '../components/Layout'
-import { ShoppingBag } from 'lucide-react'
+import { Edit2, Plus, ShoppingBag, Trash2 } from 'lucide-react'
 
-interface Supplier {
-  id: string
-  name: string
-}
-
-interface Product {
-  id: string
-  name: string
-  quantity: number
-}
-
-interface PurchaseRecord {
-  id: string
-  quantity: number
-  purchase_date: string
-  suppliers?: { name: string }
-  products?: { name: string }
-}
+type Supplier = { id: string; name: string }
+type Product = { id: string; name: string; quantity: number }
+type Line = { product_id: string; quantity: string | number }
+type PurchaseRow = { id: string; invoice_no: string; invoice_date: string; supplier_id: string; product_id: string; quantity: number; suppliers?: { name: string }; products?: { name: string } }
+const today = () => new Date().toISOString().slice(0, 10)
+const blankLine = (): Line => ({ product_id: '', quantity: '' })
 
 export default function Purchases() {
-  const [suppliers, setSuppliers] = useState<Supplier[]>([])
-  const [products, setProducts] = useState<Product[]>([])
-  const [recentPurchases, setRecentPurchases] = useState<PurchaseRecord[]>([])
-  const [loading, setLoading] = useState(true)
-  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
-
-  const [formData, setFormData] = useState({
-    supplier_id: '',
-    product_id: '',
-    quantity: '' as string | number,
-  })
-
-  useEffect(() => {
-    fetchData()
-  }, [])
-
-  const fetchData = async () => {
-    try {
-      setLoading(true)
-      const [suppliersRes, productsRes, purchasesRes] = await Promise.all([
-        supabase.from('suppliers').select('id, name').order('name'),
-        supabase.from('products').select('id, name, quantity').order('name'),
-        supabase
-          .from('purchases')
-          .select('id, quantity, purchase_date, suppliers(name), products(name)')
-          .order('purchase_date', { ascending: false })
-          .limit(15),
-      ])
-
-      if (suppliersRes.error) throw suppliersRes.error
-      if (productsRes.error) throw productsRes.error
-      if (purchasesRes.error) throw purchasesRes.error
-
-      setSuppliers(suppliersRes.data || [])
-      setProducts(productsRes.data || [])
-      setRecentPurchases((purchasesRes.data as any) || [])
-    } catch (error) {
-      console.error('Error:', error)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const selectAllOnFocus = (e: React.FocusEvent<HTMLInputElement>) => e.target.select()
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setMessage(null)
-
-    const quantity = Number(formData.quantity) || 0
-    const selectedProduct = products.find((p) => p.id === formData.product_id)
-
-    if (!formData.supplier_id || !formData.product_id || quantity <= 0) {
-      setMessage({ type: 'error', text: 'من فضلك اختر المورد والدواء واكتب كمية صحيحة' })
-      return
-    }
-
-    try {
-      const { error: purchaseError } = await supabase.from('purchases').insert([
-        {
-          supplier_id: formData.supplier_id,
-          product_id: formData.product_id,
-          quantity,
-        },
-      ])
-      if (purchaseError) throw purchaseError
-
-      if (selectedProduct) {
-        const newQuantity = selectedProduct.quantity + quantity
-        const { error: updateError } = await supabase
-          .from('products')
-          .update({ quantity: newQuantity })
-          .eq('id', selectedProduct.id)
-        if (updateError) throw updateError
-      }
-
-      setMessage({ type: 'success', text: 'تم تسجيل عملية الشراء وتحديث المخزن بنجاح' })
-      setFormData({ supplier_id: '', product_id: '', quantity: '' })
-      fetchData()
-    } catch (error) {
-      console.error('Error:', error)
-      setMessage({ type: 'error', text: 'حدث خطأ أثناء تسجيل عملية الشراء' })
-    }
-  }
-
-  return (
-    <Layout>
-      <div className="space-y-4 md:space-y-6">
-        <div>
-          <h1 className="text-2xl md:text-3xl font-bold text-gray-900">شراء</h1>
-          <p className="text-gray-600 text-sm md:text-base mt-1">سجّل عملية شراء من مورد وسيتم إضافة الكمية للمخزن تلقائياً</p>
-        </div>
-
-        <div className="bg-white p-4 md:p-6 rounded-lg shadow">
-          {message && (
-            <div
-              className={`p-3 rounded-lg mb-4 text-sm ${
-                message.type === 'success' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'
-              }`}
-            >
-              {message.text}
-            </div>
-          )}
-
-          <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4">
-            <select
-              value={formData.supplier_id}
-              onChange={(e) => setFormData({ ...formData, supplier_id: e.target.value })}
-              required
-              className="p-2 md:p-3 border rounded-lg text-sm md:text-base"
-            >
-              <option value="">اختر المورد</option>
-              {suppliers.map((s) => (
-                <option key={s.id} value={s.id}>{s.name}</option>
-              ))}
-            </select>
-
-            <select
-              value={formData.product_id}
-              onChange={(e) => setFormData({ ...formData, product_id: e.target.value })}
-              required
-              className="p-2 md:p-3 border rounded-lg text-sm md:text-base"
-            >
-              <option value="">اختر الدواء</option>
-              {products.map((p) => (
-                <option key={p.id} value={p.id}>{p.name} (الحالي: {p.quantity})</option>
-              ))}
-            </select>
-
-            <input
-              type="number"
-              placeholder="الكمية"
-              value={formData.quantity}
-              onFocus={selectAllOnFocus}
-              onChange={(e) => setFormData({ ...formData, quantity: e.target.value })}
-              required
-              className="p-2 md:p-3 border rounded-lg text-sm md:text-base"
-            />
-
-            <button
-              type="submit"
-              className="col-span-1 md:col-span-3 bg-pharmacy-500 text-white px-4 py-3 rounded-lg flex items-center justify-center gap-2 hover:bg-pharmacy-600 transition-colors font-medium"
-            >
-              <ShoppingBag size={20} />
-              تسجيل عملية الشراء
-            </button>
-          </form>
-        </div>
-
-        <div className="bg-white rounded-lg shadow overflow-hidden">
-          <div className="p-4 border-b"><h2 className="text-lg font-bold">آخر عمليات الشراء</h2></div>
-          {loading ? (
-            <p className="p-4 text-sm">جاري التحميل...</p>
-          ) : recentPurchases.length === 0 ? (
-            <p className="p-4 text-sm text-gray-600">لا توجد عمليات شراء بعد</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-gray-50 border-b">
-                  <tr>
-                    <th className="px-6 py-3 text-right text-sm font-medium text-gray-900">المورد</th>
-                    <th className="px-6 py-3 text-right text-sm font-medium text-gray-900">الدواء</th>
-                    <th className="px-6 py-3 text-right text-sm font-medium text-gray-900">الكمية</th>
-                    <th className="px-6 py-3 text-right text-sm font-medium text-gray-900">التاريخ</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {recentPurchases.map((purchase) => (
-                    <tr key={purchase.id} className="border-b hover:bg-gray-50">
-                      <td className="px-6 py-4 text-sm text-gray-900">{(purchase as any).suppliers?.name || '-'}</td>
-                      <td className="px-6 py-4 text-sm text-gray-900">{(purchase as any).products?.name || '-'}</td>
-                      <td className="px-6 py-4 text-sm text-gray-900">{purchase.quantity}</td>
-                      <td className="px-6 py-4 text-sm text-gray-600">{new Date(purchase.purchase_date).toLocaleString('ar-EG')}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      </div>
-    </Layout>
-  )
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]); const [products, setProducts] = useState<Product[]>([]); const [rows, setRows] = useState<PurchaseRow[]>([])
+  const [form, setForm] = useState({ supplier_id: '', invoice_date: today(), invoice_no: '' }); const [lines, setLines] = useState<Line[]>([blankLine()]); const [editing, setEditing] = useState<string | null>(null); const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null); const [loading, setLoading] = useState(true)
+  const [newProduct, setNewProduct] = useState({ name: '', quantity: '', min_quantity: '0', expiry_date: '' }); const [addingProduct, setAddingProduct] = useState(false)
+  useEffect(() => { fetchData() }, [])
+  const fetchData = async () => { setLoading(true); const [s, p, r] = await Promise.all([supabase.from('suppliers').select('id,name').order('name'), supabase.from('products').select('id,name,quantity').order('name'), supabase.from('purchases').select('id,invoice_no,invoice_date,supplier_id,product_id,quantity,suppliers(name),products(name)').order('invoice_date', { ascending: false }).limit(100)]); if (s.error || p.error || r.error) setMessage({ type: 'error', text: 'تعذر تحميل البيانات. شغّل ملف ترحيل الفواتير أولًا.' }); setSuppliers(s.data || []); setProducts(p.data || []); setRows((r.data as unknown as PurchaseRow[]) || []); setLoading(false) }
+  const grouped = useMemo(() => Object.values(rows.reduce<Record<string, PurchaseRow[]>>((a, r) => { const k = r.invoice_no || r.id; (a[k] ||= []).push(r); return a }, {})), [rows])
+  const setLine = (i: number, patch: Partial<Line>) => setLines(lines.map((l, n) => n === i ? { ...l, ...patch } : l))
+  const reset = () => { setForm({ supplier_id: '', invoice_date: today(), invoice_no: '' }); setLines([blankLine()]); setEditing(null); setAddingProduct(false); setNewProduct({ name: '', quantity: '', min_quantity: '0', expiry_date: '' }) }
+  const addProduct = async () => { if (!newProduct.name.trim() || Number(newProduct.quantity) < 0 || !newProduct.expiry_date) return setMessage({ type: 'error', text: 'اكتب اسم الصنف والكمية والصلاحية' }); const code = `MED-${Date.now().toString().slice(-8)}`; const { data, error } = await supabase.from('products').insert([{ name: newProduct.name.trim(), quantity: Number(newProduct.quantity), min_quantity: Number(newProduct.min_quantity) || 0, expiry_date: newProduct.expiry_date, code }]).select('id,name,quantity').single(); if (error) return setMessage({ type: 'error', text: 'تعذر إضافة الصنف الجديد' }); setProducts([...products, data]); setLines([...lines, { product_id: data.id, quantity: newProduct.quantity }]); setAddingProduct(false); setNewProduct({ name: '', quantity: '', min_quantity: '0', expiry_date: '' }); setMessage({ type: 'success', text: 'تمت إضافة الصنف للمخزن وإلى الفاتورة' }) }
+  const editInvoice = (invoice: PurchaseRow[]) => { const f = invoice[0]; setEditing(f.invoice_no); setForm({ supplier_id: f.supplier_id, invoice_date: f.invoice_date, invoice_no: f.invoice_no }); setLines(invoice.map(r => ({ product_id: r.product_id, quantity: r.quantity }))); window.scrollTo({ top: 0, behavior: 'smooth' }) }
+  const save = async (e: React.FormEvent) => { e.preventDefault(); setMessage(null); const clean = lines.filter(l => l.product_id && Number(l.quantity) > 0); if (!form.supplier_id || !form.invoice_date || !clean.length) return setMessage({ type: 'error', text: 'اختر المورد والتاريخ وأضف صنفًا واحدًا على الأقل' }); const totals: Record<string, number> = {}; clean.forEach(l => { totals[l.product_id] = (totals[l.product_id] || 0) + Number(l.quantity) }); try { const invoiceNo = form.invoice_no || `PUR-${Date.now().toString().slice(-8)}`; const oldRows = editing ? rows.filter(r => r.invoice_no === editing) : []; if (editing) { for (const r of oldRows) await supabase.from('products').update({ quantity: Math.max(0, (products.find(p => p.id === r.product_id)?.quantity || 0) - r.quantity) }).eq('id', r.product_id); const del = await supabase.from('purchases').delete().eq('invoice_no', editing); if (del.error) throw del.error } const ins = await supabase.from('purchases').insert(clean.map(l => ({ invoice_no: invoiceNo, invoice_date: form.invoice_date, supplier_id: form.supplier_id, product_id: l.product_id, quantity: Number(l.quantity) }))); if (ins.error) throw ins.error; for (const [id, qty] of Object.entries(totals)) { const current = products.find(p => p.id === id)?.quantity || 0; const old = editing ? oldRows.filter(r => r.product_id === id).reduce((n, r) => n + r.quantity, 0) : 0; const u = await supabase.from('products').update({ quantity: current - old + qty }).eq('id', id); if (u.error) throw u.error } setMessage({ type: 'success', text: editing ? 'تم تعديل فاتورة الشراء' : 'تم حفظ فاتورة الشراء وإضافة الكميات للمخزن' }); reset(); fetchData() } catch (err) { console.error(err); setMessage({ type: 'error', text: 'حدث خطأ أثناء حفظ الفاتورة' }) } }
+  return <Layout><div className="space-y-5"><div><h1 className="text-2xl md:text-3xl font-bold">شراء</h1><p className="text-gray-600 mt-1">أضف عدة أصناف في فاتورة واحدة، حتى لو كان الصنف جديدًا</p></div><div className="bg-white p-4 md:p-6 rounded-lg shadow"><h2 className="font-bold mb-4">{editing ? `تعديل الفاتورة ${editing}` : 'فاتورة شراء جديدة'}</h2>{message && <div className={`p-3 rounded mb-4 ${message.type === 'success' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'}`}>{message.text}</div>}<form onSubmit={save} className="space-y-4"><div className="grid grid-cols-1 md:grid-cols-3 gap-3"><select value={form.supplier_id} onChange={e => setForm({ ...form, supplier_id: e.target.value })} className="p-3 border rounded-lg" required><option value="">اختر المورد</option>{suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select><input type="date" value={form.invoice_date} onChange={e => setForm({ ...form, invoice_date: e.target.value })} className="p-3 border rounded-lg" required /><input value={form.invoice_no} onChange={e => setForm({ ...form, invoice_no: e.target.value })} placeholder="رقم الفاتورة (اختياري)" className="p-3 border rounded-lg" disabled={!!editing} /></div><div className="space-y-2">{lines.map((line, i) => <div key={i} className="flex gap-2"><select value={line.product_id} onChange={e => setLine(i, { product_id: e.target.value })} className="p-3 border rounded-lg flex-1" required><option value="">اختر الصنف</option>{products.map(p => <option key={p.id} value={p.id}>{p.name} (الحالي: {p.quantity})</option>)}</select><input type="number" min="1" value={line.quantity} onChange={e => setLine(i, { quantity: e.target.value })} placeholder="الكمية" className="p-3 border rounded-lg w-28" required />{lines.length > 1 && <button type="button" onClick={() => setLines(lines.filter((_, n) => n !== i))} className="text-red-600"><Trash2 size={20} /></button>}</div>)}</div>{addingProduct && <div className="border rounded-lg p-3 bg-blue-50 grid grid-cols-1 md:grid-cols-4 gap-2"><input value={newProduct.name} onChange={e => setNewProduct({ ...newProduct, name: e.target.value })} placeholder="اسم الصنف الجديد" className="p-2 border rounded" /><input type="number" min="0" value={newProduct.quantity} onChange={e => setNewProduct({ ...newProduct, quantity: e.target.value })} placeholder="الكمية" className="p-2 border rounded" /><input type="number" min="0" value={newProduct.min_quantity} onChange={e => setNewProduct({ ...newProduct, min_quantity: e.target.value })} placeholder="الحد الأدنى" className="p-2 border rounded" /><input type="date" value={newProduct.expiry_date} onChange={e => setNewProduct({ ...newProduct, expiry_date: e.target.value })} className="p-2 border rounded" /><button type="button" onClick={addProduct} className="bg-blue-600 text-white p-2 rounded md:col-span-2">إضافة الصنف للمخزن والفتورة</button></div>}<div className="flex flex-wrap gap-2"><button type="button" onClick={() => setLines([...lines, blankLine()])} className="border border-pharmacy-500 text-pharmacy-600 px-4 py-2 rounded-lg flex items-center gap-1"><Plus size={18} />إضافة صنف</button><button type="button" onClick={() => setAddingProduct(!addingProduct)} className="border border-blue-500 text-blue-600 px-4 py-2 rounded-lg">شراء صنف جديد</button><button className="bg-pharmacy-500 text-white px-5 py-2 rounded-lg flex items-center gap-2"><ShoppingBag size={18} />{editing ? 'حفظ التعديل' : 'حفظ الفاتورة'}</button>{editing && <button type="button" onClick={reset} className="bg-gray-500 text-white px-5 py-2 rounded-lg">إلغاء</button>}</div></form></div><div className="bg-white rounded-lg shadow overflow-hidden"><div className="p-4 border-b font-bold">الفواتير السابقة</div>{loading ? <p className="p-4">جاري التحميل...</p> : grouped.map(invoice => <div key={invoice[0].invoice_no || invoice[0].id} className="border-b p-4"><div className="flex flex-wrap justify-between gap-2"><div><b>فاتورة {invoice[0].invoice_no}</b><span className="text-gray-600 mr-3">{invoice[0].suppliers?.name} · {invoice[0].invoice_date}</span></div><button onClick={() => editInvoice(invoice)} className="text-blue-600 flex items-center gap-1"><Edit2 size={16} />تعديل</button></div><div className="text-sm text-gray-600 mt-2">{invoice.map(r => `${r.products?.name || '-'} (${r.quantity})`).join('، ')}</div></div>)}</div></div></Layout>
 }

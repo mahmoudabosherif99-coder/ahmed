@@ -1,214 +1,69 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import Layout from '../components/Layout'
-import { ShoppingCart } from 'lucide-react'
+import { Edit2, Plus, ShoppingCart, Trash2 } from 'lucide-react'
 
-interface Customer {
-  id: string
-  name: string
-}
+type Customer = { id: string; name: string }
+type Product = { id: string; name: string; quantity: number }
+type Line = { product_id: string; quantity: string | number }
+type SaleRow = { id: string; invoice_no: string; invoice_date: string; customer_id: string; product_id: string; quantity: number; customers?: { name: string }; products?: { name: string } }
 
-interface Product {
-  id: string
-  name: string
-  quantity: number
-}
-
-interface SaleRecord {
-  id: string
-  quantity: number
-  sale_date: string
-  customers?: { name: string }
-  products?: { name: string }
-}
+const today = () => new Date().toISOString().slice(0, 10)
+const newLine = (): Line => ({ product_id: '', quantity: '' })
 
 export default function Sales() {
   const [customers, setCustomers] = useState<Customer[]>([])
   const [products, setProducts] = useState<Product[]>([])
-  const [recentSales, setRecentSales] = useState<SaleRecord[]>([])
-  const [loading, setLoading] = useState(true)
+  const [rows, setRows] = useState<SaleRow[]>([])
+  const [form, setForm] = useState({ customer_id: '', invoice_date: today(), invoice_no: '' })
+  const [lines, setLines] = useState<Line[]>([newLine()])
+  const [editingInvoice, setEditingInvoice] = useState<string | null>(null)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [loading, setLoading] = useState(true)
 
-  const [formData, setFormData] = useState({
-    customer_id: '',
-    product_id: '',
-    quantity: '' as string | number,
-  })
-
-  useEffect(() => {
-    fetchData()
-  }, [])
-
+  useEffect(() => { fetchData() }, [])
   const fetchData = async () => {
-    try {
-      setLoading(true)
-      const [customersRes, productsRes, salesRes] = await Promise.all([
-        supabase.from('customers').select('id, name').order('name'),
-        supabase.from('products').select('id, name, quantity').order('name'),
-        supabase
-          .from('sales')
-          .select('id, quantity, sale_date, customers(name), products(name)')
-          .order('sale_date', { ascending: false })
-          .limit(15),
-      ])
-
-      if (customersRes.error) throw customersRes.error
-      if (productsRes.error) throw productsRes.error
-      if (salesRes.error) throw salesRes.error
-
-      setCustomers(customersRes.data || [])
-      setProducts(productsRes.data || [])
-      setRecentSales((salesRes.data as any) || [])
-    } catch (error) {
-      console.error('Error:', error)
-    } finally {
-      setLoading(false)
-    }
+    setLoading(true)
+    const [c, p, s] = await Promise.all([
+      supabase.from('customers').select('id,name').order('name'),
+      supabase.from('products').select('id,name,quantity').order('name'),
+      supabase.from('sales').select('id,invoice_no,invoice_date,customer_id,product_id,quantity,customers(name),products(name)').order('invoice_date', { ascending: false }).limit(100),
+    ])
+    if (c.error || p.error || s.error) setMessage({ type: 'error', text: 'تعذر تحميل البيانات. تأكد من تشغيل ملف ترحيل الفواتير.' })
+      setCustomers(c.data || []); setProducts(p.data || []); setRows((s.data as unknown as SaleRow[]) || []); setLoading(false)
   }
-
-  const selectAllOnFocus = (e: React.FocusEvent<HTMLInputElement>) => e.target.select()
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setMessage(null)
-
-    const quantity = Number(formData.quantity) || 0
-    const selectedProduct = products.find((p) => p.id === formData.product_id)
-
-    if (!formData.customer_id || !formData.product_id || quantity <= 0) {
-      setMessage({ type: 'error', text: 'من فضلك اختر العميل والدواء واكتب كمية صحيحة' })
-      return
-    }
-
-    if (selectedProduct && quantity > selectedProduct.quantity) {
-      setMessage({ type: 'error', text: `الكمية المتاحة في المخزن ${selectedProduct.quantity} فقط` })
-      return
-    }
-
+  const grouped = useMemo(() => Object.values(rows.reduce<Record<string, SaleRow[]>>((a, r) => { const key = r.invoice_no || r.id; (a[key] ||= []).push(r); return a }, {})), [rows])
+  const setLine = (i: number, patch: Partial<Line>) => setLines(lines.map((l, n) => n === i ? { ...l, ...patch } : l))
+  const reset = () => { setForm({ customer_id: '', invoice_date: today(), invoice_no: '' }); setLines([newLine()]); setEditingInvoice(null) }
+  const editInvoice = (invoice: SaleRow[]) => {
+    const first = invoice[0]
+    setEditingInvoice(first.invoice_no); setForm({ customer_id: first.customer_id, invoice_date: first.invoice_date, invoice_no: first.invoice_no })
+    setLines(invoice.map(r => ({ product_id: r.product_id, quantity: r.quantity }))); window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault(); setMessage(null)
+    const clean = lines.filter(l => l.product_id && Number(l.quantity) > 0)
+    if (!form.customer_id || !form.invoice_date || !clean.length) return setMessage({ type: 'error', text: 'اختر العميل والتاريخ وأضف صنفًا واحدًا على الأقل' })
+    const totals: Record<string, number> = {}
+    clean.forEach(l => { totals[l.product_id] = (totals[l.product_id] || 0) + Number(l.quantity) })
+    for (const [id, qty] of Object.entries(totals)) { const p = products.find(x => x.id === id); const old = editingInvoice ? rows.filter(r => r.invoice_no === editingInvoice && r.product_id === id).reduce((n, r) => n + r.quantity, 0) : 0; if (p && qty > p.quantity + old) return setMessage({ type: 'error', text: `الكمية المتاحة من ${p.name} غير كافية` }) }
     try {
-      const { error: saleError } = await supabase.from('sales').insert([
-        {
-          customer_id: formData.customer_id,
-          product_id: formData.product_id,
-          quantity,
-        },
-      ])
-      if (saleError) throw saleError
-
-      if (selectedProduct) {
-        const newQuantity = selectedProduct.quantity - quantity
-        const { error: updateError } = await supabase
-          .from('products')
-          .update({ quantity: newQuantity })
-          .eq('id', selectedProduct.id)
-        if (updateError) throw updateError
+      const invoiceNo = form.invoice_no || `SALE-${Date.now().toString().slice(-8)}`
+      if (editingInvoice) {
+        const oldRows = rows.filter(r => r.invoice_no === editingInvoice)
+        for (const r of oldRows) { await supabase.from('products').update({ quantity: (products.find(p => p.id === r.product_id)?.quantity || 0) + r.quantity }).eq('id', r.product_id) }
+        const del = await supabase.from('sales').delete().eq('invoice_no', editingInvoice); if (del.error) throw del.error
       }
-
-      setMessage({ type: 'success', text: 'تم تسجيل عملية البيع وتحديث المخزن بنجاح' })
-      setFormData({ customer_id: '', product_id: '', quantity: '' })
-      fetchData()
-    } catch (error) {
-      console.error('Error:', error)
-      setMessage({ type: 'error', text: 'حدث خطأ أثناء تسجيل عملية البيع' })
-    }
+      const insert = await supabase.from('sales').insert(clean.map(l => ({ invoice_no: invoiceNo, invoice_date: form.invoice_date, customer_id: form.customer_id, product_id: l.product_id, quantity: Number(l.quantity) }))); if (insert.error) throw insert.error
+      for (const [id, qty] of Object.entries(totals)) { const current = products.find(p => p.id === id)?.quantity || 0; const restored = editingInvoice ? rows.filter(r => r.invoice_no === editingInvoice && r.product_id === id).reduce((n, r) => n + r.quantity, 0) : 0; const u = await supabase.from('products').update({ quantity: current + restored - qty }).eq('id', id); if (u.error) throw u.error }
+      setMessage({ type: 'success', text: editingInvoice ? 'تم تعديل الفاتورة وتحديث المخزن' : 'تم حفظ فاتورة البيع وتحديث المخزن' }); reset(); fetchData()
+    } catch (err) { console.error(err); setMessage({ type: 'error', text: 'حدث خطأ أثناء حفظ الفاتورة' }) }
   }
-
-  return (
-    <Layout>
-      <div className="space-y-4 md:space-y-6">
-        <div>
-          <h1 className="text-2xl md:text-3xl font-bold text-gray-900">البيع</h1>
-          <p className="text-gray-600 text-sm md:text-base mt-1">سجّل عملية بيع لعميل وسيتم خصم الكمية من المخزن تلقائياً</p>
-        </div>
-
-        <div className="bg-white p-4 md:p-6 rounded-lg shadow">
-          {message && (
-            <div
-              className={`p-3 rounded-lg mb-4 text-sm ${
-                message.type === 'success' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'
-              }`}
-            >
-              {message.text}
-            </div>
-          )}
-
-          <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4">
-            <select
-              value={formData.customer_id}
-              onChange={(e) => setFormData({ ...formData, customer_id: e.target.value })}
-              required
-              className="p-2 md:p-3 border rounded-lg text-sm md:text-base"
-            >
-              <option value="">اختر العميل</option>
-              {customers.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
-
-            <select
-              value={formData.product_id}
-              onChange={(e) => setFormData({ ...formData, product_id: e.target.value })}
-              required
-              className="p-2 md:p-3 border rounded-lg text-sm md:text-base"
-            >
-              <option value="">اختر الدواء</option>
-              {products.map((p) => (
-                <option key={p.id} value={p.id}>{p.name} (متاح: {p.quantity})</option>
-              ))}
-            </select>
-
-            <input
-              type="number"
-              placeholder="الكمية"
-              value={formData.quantity}
-              onFocus={selectAllOnFocus}
-              onChange={(e) => setFormData({ ...formData, quantity: e.target.value })}
-              required
-              className="p-2 md:p-3 border rounded-lg text-sm md:text-base"
-            />
-
-            <button
-              type="submit"
-              className="col-span-1 md:col-span-3 bg-pharmacy-500 text-white px-4 py-3 rounded-lg flex items-center justify-center gap-2 hover:bg-pharmacy-600 transition-colors font-medium"
-            >
-              <ShoppingCart size={20} />
-              تسجيل عملية البيع
-            </button>
-          </form>
-        </div>
-
-        <div className="bg-white rounded-lg shadow overflow-hidden">
-          <div className="p-4 border-b"><h2 className="text-lg font-bold">آخر عمليات البيع</h2></div>
-          {loading ? (
-            <p className="p-4 text-sm">جاري التحميل...</p>
-          ) : recentSales.length === 0 ? (
-            <p className="p-4 text-sm text-gray-600">لا توجد عمليات بيع بعد</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-gray-50 border-b">
-                  <tr>
-                    <th className="px-6 py-3 text-right text-sm font-medium text-gray-900">العميل</th>
-                    <th className="px-6 py-3 text-right text-sm font-medium text-gray-900">الدواء</th>
-                    <th className="px-6 py-3 text-right text-sm font-medium text-gray-900">الكمية</th>
-                    <th className="px-6 py-3 text-right text-sm font-medium text-gray-900">التاريخ</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {recentSales.map((sale) => (
-                    <tr key={sale.id} className="border-b hover:bg-gray-50">
-                      <td className="px-6 py-4 text-sm text-gray-900">{(sale as any).customers?.name || '-'}</td>
-                      <td className="px-6 py-4 text-sm text-gray-900">{(sale as any).products?.name || '-'}</td>
-                      <td className="px-6 py-4 text-sm text-gray-900">{sale.quantity}</td>
-                      <td className="px-6 py-4 text-sm text-gray-600">{new Date(sale.sale_date).toLocaleString('ar-EG')}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      </div>
-    </Layout>
-  )
+  return <Layout><div className="space-y-5"><div><h1 className="text-2xl md:text-3xl font-bold">البيع</h1><p className="text-gray-600 mt-1">فاتورة بيع بأكثر من صنف مع إمكانية التعديل</p></div>
+    <div className="bg-white p-4 md:p-6 rounded-lg shadow"><h2 className="font-bold mb-4">{editingInvoice ? `تعديل الفاتورة ${editingInvoice}` : 'فاتورة بيع جديدة'}</h2>{message && <div className={`p-3 rounded mb-4 ${message.type === 'success' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'}`}>{message.text}</div>}
+      <form onSubmit={save} className="space-y-4"><div className="grid grid-cols-1 md:grid-cols-3 gap-3"><select value={form.customer_id} onChange={e => setForm({ ...form, customer_id: e.target.value })} className="p-3 border rounded-lg" required><option value="">اختر العميل</option>{customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select><input type="date" value={form.invoice_date} onChange={e => setForm({ ...form, invoice_date: e.target.value })} className="p-3 border rounded-lg" required /><input value={form.invoice_no} onChange={e => setForm({ ...form, invoice_no: e.target.value })} placeholder="رقم الفاتورة (اختياري)" className="p-3 border rounded-lg" disabled={!!editingInvoice} /></div>
+        <div className="space-y-2">{lines.map((line, i) => <div key={i} className="flex gap-2"><select value={line.product_id} onChange={e => setLine(i, { product_id: e.target.value })} className="p-3 border rounded-lg flex-1" required><option value="">اختر الصنف</option>{products.map(p => <option key={p.id} value={p.id}>{p.name} (متاح: {p.quantity})</option>)}</select><input type="number" min="1" value={line.quantity} onChange={e => setLine(i, { quantity: e.target.value })} placeholder="الكمية" className="p-3 border rounded-lg w-28" required />{lines.length > 1 && <button type="button" onClick={() => setLines(lines.filter((_, n) => n !== i))} className="text-red-600"><Trash2 size={20} /></button>}</div>)}</div>
+        <div className="flex flex-wrap gap-2"><button type="button" onClick={() => setLines([...lines, newLine()])} className="border border-pharmacy-500 text-pharmacy-600 px-4 py-2 rounded-lg flex items-center gap-1"><Plus size={18} />إضافة صنف</button><button className="bg-pharmacy-500 text-white px-5 py-2 rounded-lg flex items-center gap-2"><ShoppingCart size={18} />{editingInvoice ? 'حفظ التعديل' : 'حفظ الفاتورة'}</button>{editingInvoice && <button type="button" onClick={reset} className="bg-gray-500 text-white px-5 py-2 rounded-lg">إلغاء</button>}</div>
+      </form></div>
+    <div className="bg-white rounded-lg shadow overflow-hidden"><div className="p-4 border-b font-bold">الفواتير السابقة</div>{loading ? <p className="p-4">جاري التحميل...</p> : grouped.map(invoice => <div key={invoice[0].invoice_no || invoice[0].id} className="border-b p-4"><div className="flex flex-wrap justify-between gap-2"><div><b>فاتورة {invoice[0].invoice_no}</b><span className="text-gray-600 mr-3">{invoice[0].customers?.name} · {invoice[0].invoice_date}</span></div><button onClick={() => editInvoice(invoice)} className="text-blue-600 flex items-center gap-1"><Edit2 size={16} />تعديل</button></div><div className="text-sm text-gray-600 mt-2">{invoice.map(r => `${r.products?.name || '-'} (${r.quantity})`).join('، ')}</div></div>)}</div></div></Layout>
 }
