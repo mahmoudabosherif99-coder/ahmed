@@ -35,6 +35,20 @@ export default function Sales() {
   const grouped = useMemo(() => Object.values(rows.reduce<Record<string, SaleRow[]>>((a, r) => { const key = r.invoice_no || r.id; (a[key] ||= []).push(r); return a }, {})), [rows])
   const setLine = (i: number, patch: Partial<Line>) => setLines(lines.map((l, n) => n === i ? { ...l, ...patch } : l))
   const reset = () => { setForm({ customer_id: '', invoice_date: today(), invoice_no: '' }); setLines([newLine()]); setEditingInvoice(null) }
+  const deleteInvoice = async (invoice: SaleRow[]) => {
+    if (!window.confirm(`حذف الفاتورة ${invoice[0].invoice_no}؟ سيتم إعادة الكميات للمخزن.`)) return
+    try {
+      for (const row of invoice) {
+        const product = products.find(p => p.id === row.product_id)
+        const result = await supabase.from('products').update({ quantity: (product?.quantity || 0) + row.quantity }).eq('id', row.product_id)
+        if (result.error) throw result.error
+      }
+      const result = await supabase.from('sales').delete().eq('invoice_no', invoice[0].invoice_no)
+      if (result.error) throw result.error
+      setMessage({ type: 'success', text: 'تم حذف فاتورة البيع وإعادة الكميات للمخزن' })
+      fetchData()
+    } catch (error) { console.error(error); setMessage({ type: 'error', text: 'حدث خطأ أثناء حذف الفاتورة' }) }
+  }
   const editInvoice = (invoice: SaleRow[]) => {
     const first = invoice[0]
     setEditingInvoice(first.invoice_no); setForm({ customer_id: first.customer_id, invoice_date: first.invoice_date, invoice_no: first.invoice_no })
@@ -65,5 +79,5 @@ export default function Sales() {
         <div className="space-y-2">{lines.map((line, i) => <div key={i} className="flex gap-2"><select value={line.product_id} onChange={e => setLine(i, { product_id: e.target.value })} className="p-3 border rounded-lg flex-1" required><option value="">اختر الصنف</option>{products.map(p => <option key={p.id} value={p.id}>{p.name} (متاح: {p.quantity})</option>)}</select><input type="number" min="1" value={line.quantity} onChange={e => setLine(i, { quantity: e.target.value })} placeholder="الكمية" className="p-3 border rounded-lg w-28" required />{lines.length > 1 && <button type="button" onClick={() => setLines(lines.filter((_, n) => n !== i))} className="text-red-600"><Trash2 size={20} /></button>}</div>)}</div>
         <div className="flex flex-wrap gap-2"><button type="button" onClick={() => setLines([...lines, newLine()])} className="border border-pharmacy-500 text-pharmacy-600 px-4 py-2 rounded-lg flex items-center gap-1"><Plus size={18} />إضافة صنف</button><button className="bg-pharmacy-500 text-white px-5 py-2 rounded-lg flex items-center gap-2"><ShoppingCart size={18} />{editingInvoice ? 'حفظ التعديل' : 'حفظ الفاتورة'}</button>{editingInvoice && <button type="button" onClick={reset} className="bg-gray-500 text-white px-5 py-2 rounded-lg">إلغاء</button>}</div>
       </form></div>
-    <div className="bg-white rounded-lg shadow overflow-hidden"><div className="p-4 border-b font-bold">الفواتير السابقة</div>{loading ? <p className="p-4">جاري التحميل...</p> : grouped.map(invoice => <div key={invoice[0].invoice_no || invoice[0].id} className="border-b p-4"><div className="flex flex-wrap justify-between gap-2"><div><b>فاتورة {invoice[0].invoice_no}</b><span className="text-gray-600 mr-3">{invoice[0].customers?.name} · {invoice[0].invoice_date}</span></div><button onClick={() => editInvoice(invoice)} className="text-blue-600 flex items-center gap-1"><Edit2 size={16} />تعديل</button></div><div className="text-sm text-gray-600 mt-2">{invoice.map(r => `${r.products?.name || '-'} (${r.quantity})`).join('، ')}</div></div>)}</div></div></Layout>
+    <div className="bg-white rounded-lg shadow overflow-hidden"><div className="p-4 border-b font-bold">الفواتير السابقة</div>{loading ? <p className="p-4">جاري التحميل...</p> : grouped.map(invoice => <div key={invoice[0].invoice_no || invoice[0].id} className="border-b p-4"><div className="flex flex-wrap justify-between gap-2"><div><b>فاتورة {invoice[0].invoice_no}</b><span className="text-gray-600 mr-3">{invoice[0].customers?.name} · {invoice[0].invoice_date}</span></div><div className="flex gap-3"><button onClick={() => editInvoice(invoice)} className="text-blue-600 flex items-center gap-1"><Edit2 size={16} />تعديل</button><button onClick={() => deleteInvoice(invoice)} className="text-red-600 flex items-center gap-1"><Trash2 size={16} />حذف</button></div></div><div className="text-sm text-gray-600 mt-2">{invoice.map(r => `${r.products?.name || '-'} (${r.quantity})`).join('، ')}</div></div>)}</div></div></Layout>
 }
